@@ -140,7 +140,51 @@ app.get("/api/smallcase-data", async (req, res) => {
 ============================= */
 
 // (Keep your existing login, callback & holdings routes here unchanged)
+/* =============================
+   ZERODHA — FETCH HOLDINGS
+============================= */
+app.get("/api/zerodha/holdings", async (req, res) => {
+  const { user_id } = req.query;
 
+  if (!user_id) {
+    return res.status(400).send("User ID required");
+  }
+
+  try {
+    const { data: userData } = await supabase
+      .from("users_extra")
+      .select("api_key, access_token")
+      .eq("id", user_id)
+      .single();
+
+    if (!userData?.access_token) {
+      return res.status(400).send("Access token not found");
+    }
+
+    const response = await axios.get(
+      "https://api.kite.trade/portfolio/holdings",
+      {
+        headers: {
+          "X-Kite-Version": "3",
+          Authorization:
+            "token " +
+            userData.api_key +
+            ":" +
+            userData.access_token,
+        },
+      }
+    );
+
+    res.json(response.data.data);
+
+  } catch (error) {
+    console.error(
+      "Holdings error:",
+      error.response?.data || error.message
+    );
+    res.status(500).send("Error fetching holdings");
+  }
+});
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
