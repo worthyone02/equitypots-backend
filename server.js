@@ -139,28 +139,35 @@ app.get("/api/smallcase-data", async (req, res) => {
    ZERODHA LOGIN + HOLDINGS
 ============================= */
 
-// (Keep your existing login, callback & holdings routes here unchanged)
 /* =============================
    ZERODHA — FETCH HOLDINGS
 ============================= */
 app.get("/api/zerodha/holdings", async (req, res) => {
   const { user_id } = req.query;
 
+  console.log("==== HOLDINGS ROUTE HIT ====");
+  console.log("Received user_id:", user_id);
+
   if (!user_id) {
     return res.status(400).send("User ID required");
   }
 
   try {
-    const { data: userData } = await supabase
+    // 1️⃣ Fetch API key + access token from Supabase
+    const { data: userData, error } = await supabase
       .from("users_extra")
       .select("api_key, access_token")
       .eq("id", user_id)
       .single();
 
-    if (!userData?.access_token) {
-      return res.status(400).send("Access token not found");
+    console.log("User data from DB:", userData);
+    console.log("DB error:", error);
+
+    if (!userData?.api_key || !userData?.access_token) {
+      return res.status(400).send("API key or access token missing");
     }
 
+    // 2️⃣ Call Zerodha Holdings API
     const response = await axios.get(
       "https://api.kite.trade/portfolio/holdings",
       {
@@ -175,18 +182,19 @@ app.get("/api/zerodha/holdings", async (req, res) => {
       }
     );
 
+    console.log("Zerodha holdings response:", response.data);
+
+    // 3️⃣ Return holdings array
     res.json(response.data.data);
 
   } catch (error) {
-  console.log("========== HOLDINGS ERROR ==========");
-  console.log("Full error:", error);
-  console.log("Response data:", error.response?.data);
-  console.log("Status:", error.response?.status);
-  console.log("Message:", error.message);
-  console.log("====================================");
+    console.log("========== HOLDINGS ERROR ==========");
+    console.log("Full error:", error);
+    console.log("Response data:", error.response?.data);
+    console.log("Status:", error.response?.status);
+    console.log("Message:", error.message);
+    console.log("====================================");
 
-  res.status(500).send("Error fetching holdings");
-}
     res.status(500).send("Error fetching holdings");
   }
 });
