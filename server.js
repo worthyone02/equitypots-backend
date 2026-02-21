@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
@@ -8,11 +9,20 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 
+const API_KEY = process.env.ZERODHA_API_KEY;
+const API_SECRET = process.env.ZERODHA_API_SECRET;
+
 app.get("/", (req, res) => {
   res.send("Backend Running");
 });
 
-// Zerodha callback
+// Step 1: Redirect user to Zerodha login
+app.get("/api/zerodha/login", (req, res) => {
+  const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${API_KEY}`;
+  res.redirect(loginUrl);
+});
+
+// Step 2: Callback from Zerodha
 app.get("/api/zerodha/callback", async (req, res) => {
   const { request_token } = req.query;
 
@@ -21,9 +31,26 @@ app.get("/api/zerodha/callback", async (req, res) => {
   }
 
   try {
-    // Here later we generate access token
-    res.send("Request token received: " + request_token);
+    const checksum = crypto
+      .createHash("sha256")
+      .update(API_KEY + request_token + API_SECRET)
+      .digest("hex");
+
+    const response = await axios.post(
+      "https://api.kite.trade/session/token",
+      {
+        api_key: API_KEY,
+        request_token: request_token,
+        checksum: checksum,
+      }
+    );
+
+    const access_token = response.data.data.access_token;
+
+    res.send("Access Token Generated: " + access_token);
+
   } catch (error) {
+    console.error(error.response?.data || error.message);
     res.status(500).send("Error generating access token");
   }
 });
