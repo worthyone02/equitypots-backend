@@ -104,7 +104,7 @@ app.get("/api/zerodha/callback", async (req, res) => {
 
     currentUserId = null;
 
-    res.redirect('https://nextjs-boilerplate-ashy-gamma-18.vercel.app/dashboard");
+    res.redirect("https://nextjs-boilerplate-ashy-gamma-18.vercel.app/dashboard");
 
   } catch (error) {
     console.error(error.response?.data || error.message);
