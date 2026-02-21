@@ -198,6 +198,109 @@ app.get("/api/zerodha/holdings", async (req, res) => {
     res.status(500).send("Error fetching holdings");
   }
 });
+/* =============================
+   ZERODHA — LOGIN
+============================= */
+app.get("/api/zerodha/login", async (req, res) => {
+  const { user_id } = req.query;
+
+  console.log("LOGIN ROUTE HIT");
+  console.log("User ID:", user_id);
+
+  if (!user_id) {
+    return res.send("User ID missing");
+  }
+
+  currentUserId = user_id;
+
+  const { data: userData, error } = await supabase
+    .from("users_extra")
+    .select("api_key")
+    .eq("id", user_id)
+    .single();
+
+  console.log("User data:", userData);
+  console.log("DB error:", error);
+
+  if (!userData?.api_key) {
+    return res.send("API key not found");
+  }
+
+  const loginUrl =
+    `https://kite.zerodha.com/connect/login?v=3&api_key=${userData.api_key}`;
+
+  console.log("Redirecting to:", loginUrl);
+
+  res.redirect(loginUrl);
+});
+/* =============================
+   ZERODHA — CALLBACK
+============================= */
+app.get("/api/zerodha/callback", async (req, res) => {
+  const { request_token } = req.query;
+
+  console.log("CALLBACK HIT");
+  console.log("Request token:", request_token);
+  console.log("Current user ID:", currentUserId);
+
+  if (!request_token || !currentUserId) {
+    return res.send("Missing request_token or user");
+  }
+
+  try {
+    const { data: userData } = await supabase
+      .from("users_extra")
+      .select("api_key, api_secret")
+      .eq("id", currentUserId)
+      .single();
+
+    const checksum = crypto
+      .createHash("sha256")
+      .update(
+        userData.api_key +
+        request_token +
+        userData.api_secret
+      )
+      .digest("hex");
+
+    const response = await axios.post(
+      "https://api.kite.trade/session/token",
+      new URLSearchParams({
+        api_key: userData.api_key,
+        request_token: request_token,
+        checksum: checksum,
+      }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    const access_token =
+      response.data.data.access_token;
+
+    await supabase
+      .from("users_extra")
+      .update({
+        access_token,
+        broker_connected: true,
+      })
+      .eq("id", currentUserId);
+
+    currentUserId = null;
+
+    res.redirect(
+      "https://nextjs-boilerplate-ashy-gamma-18.vercel.app/dashboard"
+    );
+
+  } catch (error) {
+    console.log("Callback error:",
+      error.response?.data || error.message
+    );
+    res.send("Error generating access token");
+  }
+});
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
