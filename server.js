@@ -18,6 +18,8 @@ app.get("/", (req, res) => {
 
 // Step 1: Redirect user to Zerodha login
 app.get("/api/zerodha/login", (req, res) => {
+  console.log("API_KEY at login route:", API_KEY);
+
   const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${API_KEY}`;
   res.redirect(loginUrl);
 });
@@ -26,8 +28,16 @@ app.get("/api/zerodha/login", (req, res) => {
 app.get("/api/zerodha/callback", async (req, res) => {
   const { request_token } = req.query;
 
+  console.log("Received request_token:", request_token);
+  console.log("API_KEY:", API_KEY);
+  console.log("API_SECRET:", API_SECRET);
+
   if (!request_token) {
     return res.send("No request token received");
+  }
+
+  if (!API_KEY || !API_SECRET) {
+    return res.send("API_KEY or API_SECRET is undefined. Check Render Environment Variables.");
   }
 
   try {
@@ -36,21 +46,30 @@ app.get("/api/zerodha/callback", async (req, res) => {
       .update(API_KEY + request_token + API_SECRET)
       .digest("hex");
 
+    console.log("Generated checksum:", checksum);
+
     const response = await axios.post(
       "https://api.kite.trade/session/token",
-      {
+      new URLSearchParams({
         api_key: API_KEY,
         request_token: request_token,
         checksum: checksum,
+      }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
       }
     );
+
+    console.log("Full Zerodha response:", response.data);
 
     const access_token = response.data.data.access_token;
 
     res.send("Access Token Generated: " + access_token);
 
   } catch (error) {
-    console.error(error.response?.data || error.message);
+    console.error("Zerodha Error:", error.response?.data || error.message);
     res.status(500).send("Error generating access token");
   }
 });
