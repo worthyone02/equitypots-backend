@@ -3,30 +3,28 @@ const axios = require("axios");
 const cors = require("cors");
 const crypto = require("crypto");
 
+const { createClient } = require("@supabase/supabase-js");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 
-const API_KEY = process.env.ZERODHA_API_KEY;
-const API_SECRET = process.env.ZERODHA_API_SECRET;
-
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// Temporary in-memory store (simple MVP solution)
+// Temporary store for active login flow (MVP safe for now)
 let currentUserId = null;
 
 app.get("/", (req, res) => {
   res.send("Backend Running");
 });
 
-// Step 1: Start Zerodha login
-app.get("/api/zerodha/login", (req, res) => {
+// STEP 1 — Start Zerodha login
+app.get("/api/zerodha/login", async (req, res) => {
   const { user_id } = req.query;
 
   if (!user_id) {
@@ -35,11 +33,23 @@ app.get("/api/zerodha/login", (req, res) => {
 
   currentUserId = user_id;
 
-  const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${API_KEY}`;
+  // Fetch user's API key
+  const { data: userData } = await supabase
+    .from("users_extra")
+    .select("api_key")
+    .eq("id", user_id)
+    .single();
+
+  if (!userData?.api_key) {
+    return res.send("User API Key not found. Save API keys first.");
+  }
+
+  const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${userData.api_key}`;
+
   res.redirect(loginUrl);
 });
 
-// Step 2: Callback
+// STEP 2 — Zerodha callback
 app.get("/api/zerodha/callback", async (req, res) => {
   const { request_token } = req.query;
 
@@ -48,15 +58,30 @@ app.get("/api/zerodha/callback", async (req, res) => {
   }
 
   try {
+    // Fetch user's API key & secret
+    const { data: userData } = await supabase
+      .from("users_extra")
+      .select("api_key, api_secret")
+      .eq("id", currentUserId)
+      .single();
+
+    if (!userData?.api_key || !userData?.api_secret) {
+      return res.send("API Key or Secret missing for user.");
+    }
+
     const checksum = crypto
       .createHash("sha256")
-      .update(API_KEY + request_token + API_SECRET)
+      .update(
+        userData.api_key +
+          request_token +
+          userData.api_secret
+      )
       .digest("hex");
 
     const response = await axios.post(
       "https://api.kite.trade/session/token",
       new URLSearchParams({
-        api_key: API_KEY,
+        api_key: userData.api_key,
         request_token: request_token,
         checksum: checksum,
       }),
@@ -69,18 +94,15 @@ app.get("/api/zerodha/callback", async (req, res) => {
 
     const access_token = response.data.data.access_token;
 
-    // Save in Supabase
-    await supabase
-      .from("users_extra")
-      .upsert({
-        id: currentUserId,
-        access_token: access_token,
-        broker_connected: true,
-      });
+    // Save access token & mark connected
+    await supabase.from("users_extra").upsert({
+      id: currentUserId,
+      access_token: access_token,
+      broker_connected: true,
+    });
 
     currentUserId = null;
 
-    // Redirect back to frontend dashboard
     res.redirect("https://YOUR-FRONTEND-URL.vercel.app/dashboard");
 
   } catch (error) {
