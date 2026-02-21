@@ -178,10 +178,15 @@ app.get("/api/zerodha/holdings", async (req, res) => {
     res.json(response.data.data);
 
   } catch (error) {
-    console.error(
-      "Holdings error:",
-      error.response?.data || error.message
-    );
+  console.log("========== HOLDINGS ERROR ==========");
+  console.log("Full error:", error);
+  console.log("Response data:", error.response?.data);
+  console.log("Status:", error.response?.status);
+  console.log("Message:", error.message);
+  console.log("====================================");
+
+  res.status(500).send("Error fetching holdings");
+}
     res.status(500).send("Error fetching holdings");
   }
 });
