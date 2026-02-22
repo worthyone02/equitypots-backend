@@ -136,38 +136,52 @@ app.get("/api/smallcase-data", async (req, res) => {
 });
 
 /* =============================
-   ZERODHA LOGIN + HOLDINGS
+   ZERODHA — STABLE HOLDINGS ROUTE
 ============================= */
 
-/* =============================
-   ZERODHA — FETCH HOLDINGS
-============================= */
 app.get("/api/zerodha/holdings", async (req, res) => {
   const { user_id } = req.query;
 
   console.log("==== HOLDINGS ROUTE HIT ====");
-  console.log("Received user_id:", user_id);
+  console.log("User ID:", user_id);
 
   if (!user_id) {
-    return res.status(400).send("User ID required");
+    return res.status(400).json({
+      error: "User ID required",
+    });
   }
 
   try {
-    // 1️⃣ Fetch API key + access token from Supabase
-    const { data: userData, error } = await supabase
-      .from("users_extra")
-      .select("api_key, access_token")
-      .eq("id", user_id)
-      .single();
+    // 1️⃣ Fetch user credentials
+    const { data: userData, error } =
+      await supabase
+        .from("users_extra")
+        .select(
+          "api_key, access_token, broker_connected"
+        )
+        .eq("id", user_id)
+        .single();
 
-    console.log("User data from DB:", userData);
-    console.log("DB error:", error);
-
-    if (!userData?.api_key || !userData?.access_token) {
-      return res.status(400).send("API key or access token missing");
+    if (error || !userData) {
+      console.log("User not found");
+      return res
+        .status(404)
+        .json({ error: "User not found" });
     }
 
-    // 2️⃣ Call Zerodha Holdings API
+    if (
+      !userData.api_key ||
+      !userData.access_token
+    ) {
+      console.log(
+        "Missing API key or access token"
+      );
+      return res.status(401).json({
+        error: "Reauthorize required",
+      });
+    }
+
+    // 2️⃣ Call Zerodha
     const response = await axios.get(
       "https://api.kite.trade/portfolio/holdings",
       {
@@ -182,20 +196,48 @@ app.get("/api/zerodha/holdings", async (req, res) => {
       }
     );
 
-    console.log("Zerodha holdings response:", response.data);
+    console.log(
+      "Holdings fetched successfully"
+    );
 
-    // 3️⃣ Return holdings array
-    res.json(response.data.data);
-
+    return res.json(response.data.data);
   } catch (error) {
-    console.log("========== HOLDINGS ERROR ==========");
-    console.log("Full error:", error);
-    console.log("Response data:", error.response?.data);
-    console.log("Status:", error.response?.status);
-    console.log("Message:", error.message);
-    console.log("====================================");
+    console.log(
+      "==== HOLDINGS ERROR ===="
+    );
+    console.log(
+      error.response?.data ||
+        error.message
+    );
 
-    res.status(500).send("Error fetching holdings");
+    // 🔥 Detect expired token
+    if (
+      error.response?.data?.error_type ===
+        "TokenException" ||
+      error.response?.status === 403
+    ) {
+      console.log(
+        "Token expired. Marking broker as disconnected."
+      );
+
+      // 3️⃣ Mark broker disconnected
+      await supabase
+        .from("users_extra")
+        .update({
+          broker_connected: false,
+          access_token: null,
+        })
+        .eq("id", user_id);
+
+      return res.status(401).json({
+        error:
+          "Session expired. Please reauthorize broker.",
+      });
+    }
+
+    return res.status(500).json({
+      error: "Error fetching holdings",
+    });
   }
 });
 /* =============================
