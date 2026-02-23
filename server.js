@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
@@ -10,35 +11,63 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 
+/* =============================
+   SUPABASE
+============================= */
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
-
-let currentUserId = null;
 
 /* =============================
    ROOT
 ============================= */
+
 app.get("/", (req, res) => {
   res.send("Backend Running");
 });
 
 /* =============================
-   SMALLCASE — CREATE (Admin)
+   ADMIN — LIST ALL SMALLCASES
 ============================= */
-app.post("/api/smallcases", async (req, res) => {
+
+app.get("/api/admin/smallcases", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("smallcases")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =============================
+   ADMIN — CREATE SMALLCASE
+============================= */
+
+app.post("/api/admin/smallcases", async (req, res) => {
   const { name, sheet_url, user_id } = req.body;
 
-  // Check admin
-  const { data: user } = await supabase
+  if (!name || !sheet_url || !user_id) {
+    return res.status(400).json({ error: "Missing data" });
+  }
+
+  const { data: adminUser } = await supabase
     .from("users_extra")
     .select("role")
     .eq("id", user_id)
     .single();
 
-  if (user?.role !== "admin") {
-    return res.status(403).send("Not authorized");
+  if (adminUser?.role !== "admin") {
+    return res.status(403).json({ error: "Not authorized" });
   }
 
   const { data, error } = await supabase
@@ -51,50 +80,69 @@ app.post("/api/smallcases", async (req, res) => {
     .select()
     .single();
 
-  if (error) return res.status(500).send(error.message);
+  if (error) {
+    return res.status(500).json({ error: error.message });
+  }
 
-  res.json(data);
+  return res.json(data);
 });
 
 /* =============================
-   SMALLCASE — GRANT ACCESS
+   ADMIN — GRANT ACCESS
 ============================= */
-app.post("/api/grant-access", async (req, res) => {
+
+app.post("/api/admin/grant-access", async (req, res) => {
   const { smallcase_id, user_email } = req.body;
 
-  // Find user by email
+  if (!smallcase_id || !user_email) {
+    return res.status(400).json({ error: "Missing data" });
+  }
+
   const { data: authUsers } = await supabase.auth.admin.listUsers();
+
   const user = authUsers.users.find(
     (u) => u.email === user_email
   );
 
-  if (!user) return res.status(404).send("User not found");
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
 
   await supabase.from("smallcase_access").insert({
     smallcase_id,
     user_id: user.id,
   });
 
-  res.send("Access granted");
+  return res.json({ success: true });
 });
 
 /* =============================
-   SMALLCASE — LIST FOR USER
+   USER — LIST ASSIGNED SMALLCASES
 ============================= */
+
 app.get("/api/smallcases", async (req, res) => {
   const { user_id } = req.query;
 
-  const { data } = await supabase
+  if (!user_id) {
+    return res.status(400).json({ error: "User ID required" });
+  }
+
+  const { data, error } = await supabase
     .from("smallcase_access")
     .select("smallcases(*)")
     .eq("user_id", user_id);
 
-  res.json(data.map((d) => d.smallcases));
+  if (error) {
+    return res.status(500).json({ error: error.message });
+  }
+
+  return res.json((data || []).map((d) => d.smallcases));
 });
 
 /* =============================
-   SMALLCASE — GET SHEET DATA
+   SMALLCASE — SHEET DATA
 ============================= */
+
 app.get("/api/smallcase-data", async (req, res) => {
   const { smallcase_id } = req.query;
 
@@ -104,8 +152,9 @@ app.get("/api/smallcase-data", async (req, res) => {
     .eq("id", smallcase_id)
     .single();
 
-  if (!data?.sheet_url)
-    return res.status(404).send("Sheet not found");
+  if (!data?.sheet_url) {
+    return res.status(404).json({ error: "Sheet not found" });
+  }
 
   try {
     const response = await axios.get(
@@ -128,60 +177,39 @@ app.get("/api/smallcase-data", async (req, res) => {
       weight: parseFloat(row.c[2]?.v),
     }));
 
-    res.json(portfolio);
+    return res.json(portfolio);
 
   } catch (error) {
-    res.status(500).send("Sheet parsing error");
+    return res.status(500).json({ error: "Sheet parsing error" });
   }
 });
 
 /* =============================
-   ZERODHA — STABLE HOLDINGS ROUTE
+   ZERODHA — HOLDINGS
 ============================= */
 
 app.get("/api/zerodha/holdings", async (req, res) => {
   const { user_id } = req.query;
 
-  console.log("==== HOLDINGS ROUTE HIT ====");
-  console.log("User ID:", user_id);
-
   if (!user_id) {
-    return res.status(400).json({
-      error: "User ID required",
-    });
+    return res.status(400).json({ error: "User ID required" });
+  }
+
+  const { data: userData, error } = await supabase
+    .from("users_extra")
+    .select("api_key, access_token, broker_connected")
+    .eq("id", user_id)
+    .single();
+
+  if (error || !userData) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  if (!userData.api_key || !userData.access_token) {
+    return res.status(401).json({ error: "Reauthorize required" });
   }
 
   try {
-    // 1️⃣ Fetch user credentials
-    const { data: userData, error } =
-      await supabase
-        .from("users_extra")
-        .select(
-          "api_key, access_token, broker_connected"
-        )
-        .eq("id", user_id)
-        .single();
-
-    if (error || !userData) {
-      console.log("User not found");
-      return res
-        .status(404)
-        .json({ error: "User not found" });
-    }
-
-    if (
-      !userData.api_key ||
-      !userData.access_token
-    ) {
-      console.log(
-        "Missing API key or access token"
-      );
-      return res.status(401).json({
-        error: "Reauthorize required",
-      });
-    }
-
-    // 2️⃣ Call Zerodha
     const response = await axios.get(
       "https://api.kite.trade/portfolio/holdings",
       {
@@ -196,31 +224,13 @@ app.get("/api/zerodha/holdings", async (req, res) => {
       }
     );
 
-    console.log(
-      "Holdings fetched successfully"
-    );
-
     return res.json(response.data.data);
-  } catch (error) {
-    console.log(
-      "==== HOLDINGS ERROR ===="
-    );
-    console.log(
-      error.response?.data ||
-        error.message
-    );
 
-    // 🔥 Detect expired token
+  } catch (error) {
     if (
-      error.response?.data?.error_type ===
-        "TokenException" ||
+      error.response?.data?.error_type === "TokenException" ||
       error.response?.status === 403
     ) {
-      console.log(
-        "Token expired. Marking broker as disconnected."
-      );
-
-      // 3️⃣ Mark broker disconnected
       await supabase
         .from("users_extra")
         .update({
@@ -230,39 +240,32 @@ app.get("/api/zerodha/holdings", async (req, res) => {
         .eq("id", user_id);
 
       return res.status(401).json({
-        error:
-          "Session expired. Please reauthorize broker.",
+        error: "Session expired. Reauthorize broker.",
       });
     }
 
-    return res.status(500).json({
-      error: "Error fetching holdings",
-    });
+    return res.status(500).json({ error: "Holdings fetch failed" });
   }
 });
+
 /* =============================
    ZERODHA — LOGIN
 ============================= */
+
+let currentUserId = null;
+
 app.get("/api/zerodha/login", async (req, res) => {
   const { user_id } = req.query;
 
-  console.log("LOGIN ROUTE HIT");
-  console.log("User ID:", user_id);
-
-  if (!user_id) {
-    return res.send("User ID missing");
-  }
+  if (!user_id) return res.send("User ID missing");
 
   currentUserId = user_id;
 
-  const { data: userData, error } = await supabase
+  const { data: userData } = await supabase
     .from("users_extra")
     .select("api_key")
     .eq("id", user_id)
     .single();
-
-  console.log("User data:", userData);
-  console.log("DB error:", error);
 
   if (!userData?.api_key) {
     return res.send("API key not found");
@@ -271,46 +274,42 @@ app.get("/api/zerodha/login", async (req, res) => {
   const loginUrl =
     `https://kite.zerodha.com/connect/login?v=3&api_key=${userData.api_key}`;
 
-  console.log("Redirecting to:", loginUrl);
-
   res.redirect(loginUrl);
 });
+
 /* =============================
    ZERODHA — CALLBACK
 ============================= */
+
 app.get("/api/zerodha/callback", async (req, res) => {
   const { request_token } = req.query;
 
-  console.log("CALLBACK HIT");
-  console.log("Request token:", request_token);
-  console.log("Current user ID:", currentUserId);
-
   if (!request_token || !currentUserId) {
-    return res.send("Missing request_token or user");
+    return res.send("Invalid callback");
   }
 
+  const { data: userData } = await supabase
+    .from("users_extra")
+    .select("api_key, api_secret")
+    .eq("id", currentUserId)
+    .single();
+
+  const checksum = crypto
+    .createHash("sha256")
+    .update(
+      userData.api_key +
+      request_token +
+      userData.api_secret
+    )
+    .digest("hex");
+
   try {
-    const { data: userData } = await supabase
-      .from("users_extra")
-      .select("api_key, api_secret")
-      .eq("id", currentUserId)
-      .single();
-
-    const checksum = crypto
-      .createHash("sha256")
-      .update(
-        userData.api_key +
-        request_token +
-        userData.api_secret
-      )
-      .digest("hex");
-
     const response = await axios.post(
       "https://api.kite.trade/session/token",
       new URLSearchParams({
         api_key: userData.api_key,
-        request_token: request_token,
-        checksum: checksum,
+        request_token,
+        checksum,
       }),
       {
         headers: {
@@ -319,8 +318,7 @@ app.get("/api/zerodha/callback", async (req, res) => {
       }
     );
 
-    const access_token =
-      response.data.data.access_token;
+    const access_token = response.data.data.access_token;
 
     await supabase
       .from("users_extra")
@@ -337,12 +335,14 @@ app.get("/api/zerodha/callback", async (req, res) => {
     );
 
   } catch (error) {
-    console.log("Callback error:",
-      error.response?.data || error.message
-    );
-    res.send("Error generating access token");
+    res.send("Access token generation failed");
   }
 });
+
+/* =============================
+   START SERVER
+============================= */
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
