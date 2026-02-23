@@ -36,8 +36,7 @@ app.get("/api/admin/smallcases", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("smallcases")
-      .select("*")
-      .order("created_at", { ascending: false });
+      .select("*");
 
     if (error) {
       return res.status(500).json({ error: error.message });
